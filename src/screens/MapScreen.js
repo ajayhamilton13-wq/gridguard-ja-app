@@ -16,18 +16,6 @@ import { hasCoords, parishCentre, PARISHES } from "../utils/geo";
 import { formatClock } from "../utils/time";
 import { issueLabel, placeName, toneFor } from "../utils/outageText";
 
-// react-native-maps has no web build, so only load it on phones
-let MapView = null;
-let Marker = null;
-let Circle = null;
-if (Platform.OS !== "web") {
-  const Maps = require("react-native-maps");
-  MapView = Maps.default;
-  Marker = Maps.Marker;
-  Circle = Maps.Circle;
-}
-
-const JAMAICA = { latitude: 18.1096, longitude: -77.2975, latitudeDelta: 1.8, longitudeDelta: 1.8 };
 const FILTERS = [
   { key: "all", label: "All" },
   { key: "power", label: "Power" },
@@ -44,21 +32,13 @@ export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const { outages, location, openReport, openOutage, setOpenPlace } = useAppData();
-  const mapRef = useRef(null);
-  const [filter, setFilter] = useState("all");
+    const [filter, setFilter] = useState("all");
   const [selectedId, setSelectedId] = useState(null);
   const [search, setSearch] = useState("");
-  const [webFocus, setWebFocus] = useState(null);
+  const [mapFocus, setMapFocus] = useState(null);
   const [locateAt, setLocateAt] = useState(0);
 
-  const focusTo = (latitude, longitude, zoom = 14) => {
-    if (MapView) {
-      const delta = 360 / 2 ** zoom;
-      mapRef.current?.animateToRegion({ latitude, longitude, latitudeDelta: delta, longitudeDelta: delta }, 700);
-    } else {
-      setWebFocus({ latitude, longitude, zoom, at: Date.now() });
-    }
-  };
+  const focusTo = (latitude, longitude, zoom = 14) => setMapFocus({ latitude, longitude, zoom, at: Date.now() });
 
   // Jumps from other tabs: { outageId } or { parish }
   useEffect(() => {
@@ -116,91 +96,29 @@ export default function MapScreen() {
   const locateMe = async () => {
     const loc = await location.refresh();
     if (loc?.coords) focusTo(loc.coords.latitude, loc.coords.longitude, 15);
-    else if (!MapView) setLocateAt(Date.now());
-    else Alert.alert("Location is off", "Turn on location to jump to where you are.");
+    else setLocateAt(Date.now());
   };
 
   const onStation = (id) => setOpenPlace(STATIONS.find((s) => s.id === id) || null);
 
   return (
     <View style={{ flex: 1, backgroundColor: "#1F2A22" }}>
-      {MapView ? (
-        <MapView
-          ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={JAMAICA}
-          mapType={Platform.OS === "android" ? "hybrid" : "hybridFlyover"}
-          showsUserLocation
-          showsMyLocationButton={false}
-          showsPointsOfInterest={false}
-          toolbarEnabled={false}
-          onLongPress={(e) => openReport({ coord: e.nativeEvent.coordinate })}
-          onPress={() => setSelectedId(null)}
-        >
-          {shownOutages.map((r) => {
-            const tone = toneFor(r);
-            return (
-              <Circle
-                key={`c-${r.id}`}
-                center={{ latitude: r.latitude, longitude: r.longitude }}
-                radius={r.radius || 400}
-                strokeColor={tone.color}
-                strokeWidth={r.id === selectedId ? 4 : 2}
-                fillColor={r.type === "water" ? "rgba(29,78,216,0.28)" : "rgba(194,65,12,0.3)"}
-              />
-            );
-          })}
-          {shownOutages.map((r) => (
-            <Marker
-              key={`m-${r.id}`}
-              coordinate={{ latitude: r.latitude, longitude: r.longitude }}
-              onPress={(e) => {
-                e.stopPropagation?.();
-                setSelectedId(r.id);
-              }}
-              tracksViewChanges={false}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={[styles.dot, { backgroundColor: toneFor(r).color }]}>
-                <Ionicons name={r.type === "water" ? "water" : "flash"} size={12} color={C.cream} />
-              </View>
-            </Marker>
-          ))}
-          {shownStations.map((s) => (
-            <Marker
-              key={s.id}
-              coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-              onPress={(e) => {
-                e.stopPropagation?.();
-                onStation(s.id);
-              }}
-              tracksViewChanges={false}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={[styles.station, { backgroundColor: s.kind === "water" ? C.slate : s.type === "independent" ? C.indep : C.brownMid }]}>
-                <Ionicons name={s.kind === "water" ? "water" : "flash"} size={13} color={C.cream} />
-              </View>
-            </Marker>
-          ))}
-        </MapView>
-      ) : (
-        <WebMap
-          outages={shownOutages.map((r) => ({ id: r.id, latitude: r.latitude, longitude: r.longitude, radius: r.radius || 400, color: toneFor(r).color, selected: r.id === selectedId }))}
-          stations={shownStations.map((s) => ({
-            id: s.id,
-            name: s.name,
-            latitude: s.latitude,
-            longitude: s.longitude,
-            color: s.kind === "water" ? C.slate : s.type === "independent" ? C.indep : C.brownMid,
-            glyph: s.kind === "water" ? "\u{1F4A7}" : "⚡",
-          }))}
-          focus={webFocus}
-          locateAt={locateAt}
-          onLongPress={(coord) => openReport({ coord })}
-          onOutagePress={setSelectedId}
-          onStationPress={onStation}
-        />
-      )}
+      <WebMap
+        outages={shownOutages.map((r) => ({ id: r.id, latitude: r.latitude, longitude: r.longitude, radius: r.radius || 400, color: toneFor(r).color, selected: r.id === selectedId }))}
+        stations={shownStations.map((s) => ({
+          id: s.id,
+          name: s.name,
+          latitude: s.latitude,
+          longitude: s.longitude,
+          color: s.kind === "water" ? C.slate : s.type === "independent" ? C.indep : C.brownMid,
+          glyph: s.kind === "water" ? "\u{1F4A7}" : "⚡",
+        }))}
+        focus={mapFocus}
+        locateAt={locateAt}
+        onLongPress={(coord) => openReport({ coord })}
+        onOutagePress={setSelectedId}
+        onStationPress={onStation}
+      />
 
       <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 14, gap: 10 }} pointerEvents="box-none">
         <Frosted style={styles.search}>
