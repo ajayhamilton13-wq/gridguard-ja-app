@@ -1,6 +1,10 @@
 import React, { useEffect, useRef } from "react";
+import { Platform, StyleSheet } from "react-native";
 
-// Web has no react-native-maps, so render a Leaflet map in an iframe and talk to it with postMessage
+// Phones show the map in a WebView; the web build uses an iframe
+const WebView = Platform.OS === "web" ? null : require("react-native-webview").WebView;
+
+// Satellite map (Esri imagery via Leaflet). Needs no Google Maps key on any platform.
 const WEB_MAP_HTML = `<!doctype html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -8,10 +12,13 @@ const WEB_MAP_HTML = `<!doctype html><html><head>
 <style>html,body,#map{margin:0;height:100%;background:#1F2A22}
 .pin{width:28px;height:28px;border-radius:14px;border:3px solid #FBF8F3;box-sizing:border-box;display:flex;align-items:center;justify-content:center;font-size:12px;color:#FBF8F3}</style>
 </head><body><div id="map"></div><script>
-var map = L.map("map", { zoomControl: false }).setView([18.1096, -77.2975], 9);
+var map = L.map("map", { zoomControl: false, tapHold: true }).setView([18.1096, -77.2975], 9);
 L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery © Esri" }).addTo(map);
 L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19 }).addTo(map);
-var send = function (msg) { parent.postMessage(JSON.stringify(Object.assign({ source: "gridguard-map" }, msg)), "*"); };
+var send = function (msg) {
+  var s = JSON.stringify(Object.assign({ source: "gridguard-map" }, msg));
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(s); else parent.postMessage(s, "*");
+};
 var pin = function (bg, glyph) { return L.divIcon({ className: "", iconSize: [28, 28], html: '<div class="pin" style="background:' + bg + '">' + glyph + "</div>" }); };
 map.on("contextmenu", function (e) { send({ type: "longpress", latitude: e.latlng.lat, longitude: e.latlng.lng }); });
 map.on("locationfound", function (e) { L.circleMarker(e.latlng, { radius: 8, color: "#FBF8F3", weight: 3, fillColor: "#3E2A1B", fillOpacity: 1 }).addTo(map); });
@@ -43,26 +50,36 @@ export default function WebMap({ outages, stations, focus, locateAt, onLongPress
   const latest = useRef({});
   latest.current = { outages, stations, focus, onLongPress, onOutagePress, onStationPress };
 
-  const post = (msg) => frameRef.current?.contentWindow?.postMessage(JSON.stringify(msg), "*");
+  const post = (msg) => {
+    const data = JSON.stringify(msg);
+    if (WebView) {
+      frameRef.current?.injectJavaScript(`window.dispatchEvent(new MessageEvent("message", { data: ${JSON.stringify(data)} })); true;`);
+    } else {
+      frameRef.current?.contentWindow?.postMessage(data, "*");
+    }
+  };
   const pushData = () => post({ type: "data", outages: latest.current.outages, stations: latest.current.stations });
 
+  const handle = (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (msg?.source !== "gridguard-map") return;
+    const h = latest.current;
+    if (msg.type === "ready") {
+      pushData();
+      if (h.focus) post({ type: "focus", ...h.focus });
+    } else if (msg.type === "longpress") h.onLongPress({ latitude: msg.latitude, longitude: msg.longitude });
+    else if (msg.type === "outage") h.onOutagePress(msg.id);
+    else if (msg.type === "station") h.onStationPress(msg.id);
+  };
+
   useEffect(() => {
-    const onMessage = (ev) => {
-      let msg;
-      try {
-        msg = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
-      if (msg?.source !== "gridguard-map") return;
-      const h = latest.current;
-      if (msg.type === "ready") {
-        pushData();
-        if (h.focus) post({ type: "focus", ...h.focus });
-      } else if (msg.type === "longpress") h.onLongPress({ latitude: msg.latitude, longitude: msg.longitude });
-      else if (msg.type === "outage") h.onOutagePress(msg.id);
-      else if (msg.type === "station") h.onStationPress(msg.id);
-    };
+    if (WebView) return undefined;
+    const onMessage = (ev) => handle(ev.data);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,6 +92,23 @@ export default function WebMap({ outages, stations, focus, locateAt, onLongPress
   useEffect(() => {
     if (locateAt) post({ type: "locate" });
   }, [locateAt]);
+
+  if (WebView) {
+    return (
+      <WebView
+        ref={frameRef}
+        style={StyleSheet.absoluteFill}
+        originWhitelist={["*"]}
+        source={{ html: WEB_MAP_HTML, baseUrl: "https://gridguard.local/" }}
+        onMessage={(e) => handle(e.nativeEvent.data)}
+        javaScriptEnabled
+        domStorageEnabled
+        geolocationEnabled
+        setSupportMultipleWindows={false}
+        overScrollMode="never"
+      />
+    );
+  }
 
   return (
     <iframe
