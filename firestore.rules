@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /outageReports/{reportId} {
+      // Reports made before reporterId existed have no owner; any signed-in user may still manage those
+      function isOwner() {
+        return resource.data.get('reporterId', null) == null
+          || resource.data.reporterId == request.auth.uid;
+      }
+      function confirmedBefore() {
+        return resource.data.get('confirmedBy', []);
+      }
+      // "Me too": add exactly your own uid, once
+      function isConfirming() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmedBy'])
+          && !(request.auth.uid in confirmedBefore())
+          && request.resource.data.confirmedBy.size() == confirmedBefore().size() + 1
+          && request.resource.data.confirmedBy.hasAll(confirmedBefore())
+          && request.auth.uid in request.resource.data.confirmedBy;
+      }
+
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.get('confirmedBy', []).size() == 0;
+      // The reporter can edit their report; anyone signed in can mark it fixed or add a "Me too"
+      allow update: if request.auth != null
+        && request.resource.data.get('reporterId', null) == resource.data.get('reporterId', null)
+        && (isOwner()
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'resolvedAt'])
+          || isConfirming());
+      allow delete: if request.auth != null && isOwner();
+    }
+
+    // Shared community resources: every signed-in user can see them, only the owner can change or remove them
+    match /resources/{resourceId} {
+      function validText() {
+        return request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 200;
+      }
+
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid
+        && validText();
+      allow update: if request.auth != null
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid
+        && validText();
+      allow delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
